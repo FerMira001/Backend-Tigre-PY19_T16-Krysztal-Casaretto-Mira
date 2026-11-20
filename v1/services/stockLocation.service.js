@@ -1,6 +1,8 @@
+
 import mongoose from "mongoose";
 import StockLocation from "../models/stockLocation.model.js";
 import Warehouse from "../models/warehouse.model.js";
+import Product from "../models/product.model.js";
 import { ELEMENT_TYPES } from "../utils/enums.utils.js";
 import { createError } from "../utils/error.utils.js";
 
@@ -104,6 +106,24 @@ export const listElementStock = async (warehouseId, elementId) => {
         .sort({ positionId: 1, product: 1 });
 };
 
+// Validar producto y cantidad antes de agregar o disminuir stock
+const validateStockOperation = async (productId, quantity) => {
+
+    if (!mongoose.isValidObjectId(productId)) {
+        throw createError(400, "Debe seleccionar un producto válido");
+    }
+
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+        throw createError(400, "La cantidad debe ser un número entero mayor a cero");
+    }
+
+    const productExists = await Product.exists({ _id: productId });
+
+    if (!productExists) {
+        throw createError(404, "El producto no existe");
+    }
+};
+
 //CU21 y CU22: agregar y eliminar stock de una ubicacion especifica del mapa
 
 export const addStockLocationToElementService = async ({ wharehouseId, elementId, positionId, productId, quantity }) => {
@@ -120,6 +140,8 @@ export const addStockLocationToElementService = async ({ wharehouseId, elementId
     if (element.type === ELEMENT_TYPES.FLOOR && positionId) {
         throw createError(400, "No se permite positionId para zonas de piso");
     }
+
+    await validateStockOperation(productId, quantity);
 
     const stockLocation = await StockLocation.findOneAndUpdate( //esta consulta busca un stockLocation que tenga el mismo warehouse, elementId, positionId y productId.
         { warehouse: wharehouseId, elementId, positionId: positionId || null, product: productId },// si lo encuentra le suma la cantidad, si no lo encuentra crea uno nuevo
@@ -145,6 +167,8 @@ export const removeStockLocationToElementService = async ({ wharehouseId, elemen
     if (element.type === ELEMENT_TYPES.FLOOR && positionId) {
         throw createError(400, "No se permite positionId para zonas de piso");
     }
+
+    await validateStockOperation(productId, quantity);
 
     const baseFilter = { warehouse: wharehouseId, elementId, positionId: positionId || null, product: productId };
 
