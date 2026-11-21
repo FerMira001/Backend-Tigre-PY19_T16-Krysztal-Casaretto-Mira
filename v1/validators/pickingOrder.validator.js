@@ -18,7 +18,41 @@ const pickingOrderItemSchema = Joi.object({
         })
 });
 
-// CU25: creación de órdenes de picking y reposición
+// Obtener la fecha actual del servidor
+const todayLocalISO = () => {
+    const now = new Date();
+
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const day = String(now.getDate()).padStart(2, "0");
+
+    return `${year}-${month}-${day}`;
+};
+
+// Validar que la fecha sea válida y no sea anterior a hoy
+const deliveryDateSchema = Joi.date()
+    .iso()
+    .allow(null, "")
+    .optional()
+    .custom((value, helpers) => {
+        if (!value) return value;
+
+        const deliveryDay = value.toISOString().slice(0, 10);
+
+        if (deliveryDay < todayLocalISO()) {
+            return helpers.message(
+                "La fecha de entrega no puede ser anterior a hoy"
+            );
+        }
+
+        return value;
+    })
+    .messages({
+        "date.base": "La fecha de entrega no es válida",
+        "date.format": "La fecha de entrega debe tener un formato válido"
+    });
+
+// CU25: creación manual o por Excel
 export const createPickingOrderSchema = Joi.object({
 
     warehouse: objectIdSchema,
@@ -30,6 +64,17 @@ export const createPickingOrderSchema = Joi.object({
             "any.only": "El tipo de operación debe ser picking o reposición",
             "any.required": "Debe seleccionar un tipo de operación"
         }),
+
+    customerName: Joi.string()
+        .trim()
+        .max(150)
+        .allow("", null)
+        .optional()
+        .messages({
+            "string.max": "El nombre del cliente no puede superar los 150 caracteres"
+        }),
+
+    deliveryDate: deliveryDateSchema,
 
     items: Joi.array()
         .items(pickingOrderItemSchema)
@@ -62,10 +107,9 @@ export const createPickingOrderSchema = Joi.object({
         .max(80)
         .allow("", null)
         .optional()
-
 });
 
-// CU25: validación de cada fila del Excel de órdenes de picking y reposición
+// Validación de filas del Excel
 export const pickingOrderExcelRowSchema = Joi.object({
 
     sapCode: Joi.string()
@@ -93,5 +137,4 @@ export const pickingOrderExcelRowSchema = Joi.object({
             "number.min": "La cantidad debe ser mayor a cero",
             "any.required": "Falta la cantidad"
         })
-
 });

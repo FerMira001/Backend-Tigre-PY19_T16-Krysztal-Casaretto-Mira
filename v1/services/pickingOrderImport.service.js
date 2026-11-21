@@ -1,54 +1,77 @@
 
 import path from "node:path";
+import Product from "../models/product.model.js";
 import { createError } from "../utils/error.utils.js";
-import { normalizeHeader, readSpreadsheet } from "../utils/spreadsheet.utils.js";
-import { pickingOrderExcelRowSchema, createPickingOrderSchema } from "../validators/pickingOrder.validator.js";
-import { createPickingOrder, resolvePickingOrderExcelItems } from "./pickingOrder.service.js";
+import {
+    normalizeHeader,
+    readSpreadsheet
+} from "../utils/spreadsheet.utils.js";
+import {
+    createPickingOrderSchema,
+    pickingOrderExcelRowSchema
+} from "../validators/pickingOrder.validator.js";
+import {
+    createPickingOrder,
+    resolvePickingOrderExcelItems
+} from "./pickingOrder.service.js";
 
 
-// CU25: columnas utilizadas para importar órdenes de picking y reposición
-// Formato provisional hasta confirmar el archivo exportado desde SAP
+// CU25: columnas esperadas en el archivo Excel o CSV
+
 const PICKING_ORDER_COLUMNS = [
     {
         field: "sapCode",
         header: "Código SAP",
-        aliases: ["codigo sap", "codigo", "material"]
+        aliases: ["codigo", "material"],
+        required: true
     },
     {
         field: "description",
         header: "Descripción",
-        aliases: ["descripcion", "desc. material"],
-        optional: true
+        aliases: ["desc. material"],
+        required: false
     },
     {
         field: "quantity",
         header: "Cantidad",
-        aliases: ["cantidad a recoger", "cantidad a reponer"]
+        aliases: [
+            "cantidad a recoger",
+            "cantidad a reponer"
+        ],
+        required: true
     }
 ];
 
 
-// Identificar las columnas del archivo
+// Identificar las columnas del Excel
 const findColumnIndexes = (headerCells) => {
+
     const headers = headerCells.map(normalizeHeader);
     const indexes = {};
-    const missing = [];
+    const missingColumns = [];
 
-    for (const { field, header, aliases, optional } of PICKING_ORDER_COLUMNS) {
-        const validNames = [header, ...aliases].map(normalizeHeader);
-        const index = headers.findIndex((name) => validNames.includes(name));
+    for (const column of PICKING_ORDER_COLUMNS) {
+
+        const acceptedNames = [
+            column.header,
+            ...column.aliases
+        ].map(normalizeHeader);
+
+        const index = headers.findIndex(
+            (header) => acceptedNames.includes(header)
+        );
 
         if (index !== -1) {
-            indexes[field] = index;
-        } else if (!optional) {
-            missing.push(header);
+            indexes[column.field] = index;
+        } else if (column.required) {
+            missingColumns.push(column.header);
         }
     }
 
-    if (missing.length > 0) {
+    if (missingColumns.length > 0) {
         throw createError(
             400,
-            `Faltan columnas obligatorias: ${missing.join(", ")}`
+            `El archivo no contiene las columnas obligatorias: ${missingColumns.join(", ")}`
         );
     }
 
@@ -56,25 +79,28 @@ const findColumnIndexes = (headerCells) => {
 };
 
 
-// Convertir las filas del archivo en productos y cantidades
-const extractPickingOrderRows = (rows) => {
+// Extraer y validar los productos del archivo
+const extractPickingOrderRows = (
+    rows,
+    headerIndex,
+    columnIndexes
+) => {
 
-    const headerIndex = rows.findIndex(
-        (cells) => cells.some((cell) => String(cell ?? "").trim() !== "")
-    );
+    const products = [];
 
-    if (headerIndex === -1) {
-        throw createError(400, "El archivo está vacío");
-    }
+    for (
+        let index = headerIndex + 1;
+        index < rows.length;
+        index++
+    ) {
 
-    const columnIndexes = findColumnIndexes(rows[headerIndex]);
-    const items = [];
-
-    for (let index = headerIndex + 1; index < rows.length; index++) {
         const cells = rows[index];
 
         // Ignorar filas completamente vacías
-        if (cells.every((cell) => String(cell ?? "").trim() === "")) {
+        if (
+            !Array.isArray(cells) ||
+            cells.every((cell) => !String(cell ?? "").trim())
+        ) {
             continue;
         }
 
@@ -86,56 +112,40 @@ const extractPickingOrderRows = (rows) => {
             quantity: cells[columnIndexes.quantity] ?? ""
         };
 
-        // Validar cada fila con Joi
-        const { value, error } = pickingOrderExcelRowSchema.validate(row, {
-            abortEarly: false
-        });
+        const { value, error } = pickingOrderExcelRowSchema.validate(
+            row,
+            { abortEarly: false }
+        );
 
         if (error) {
+
+            const messages = error.details
+                .map((detail) => detail.message)
+                .join("; ");
+
             throw createError(
                 400,
-                `Error en la fila ${index + 1}: ${error.details.map(({ message }) => message).join("; ")}`
+                `Error en la fila ${index + 1}: ${messages}`
             );
         }
 
-        items.push(value);
+        products.push(value);
     }
 
-    if (items.length === 0) {
-        throw createError(400, "El archivo no contiene productos");
+    if (products.length === 0) {
+        throw createError(
+            400,
+            "El archivo no contiene productos para importar"
+        );
     }
 
-    return items;
+    return products;
 };
 
 
-// Permite recibir los operarios como un arreglo o un JSON enviado desde FormData
-const parseAssignedOperators = (value) => {
-
-    if (Array.isArray(value)) {
-        return value;
-    }
-
-    if (typeof value === "string") {
-        try {
-            const parsed = JSON.parse(value);
-
-            if (Array.isArray(parsed)) {
-                return parsed;
-            }
-        } catch {
-            // Si no es JSON, se interpreta como un único operario
-        }
-
-        return [value];
-    }
-
-    return value;
-};
-
-
-// CU25: importar una orden de trabajo de picking o reposición desde Excel o CSV
-export const importPickingOrder = async (file, data, createdBy) => {
+// CU25: leer y validar el archivo Excel o CSV
+// Esta función es compartida por la vista previa y la importación
+const readPickingOrderFile = async (file) => {
 
     if (!file) {
         throw createError(
@@ -144,45 +154,198 @@ export const importPickingOrder = async (file, data, createdBy) => {
         );
     }
 
-    // Leer el archivo reutilizando el código existente del proyecto
-    const extension = path.extname(file.originalname).toLowerCase();
-    const rows = await readSpreadsheet(file.buffer, extension);
+    const extension = path.extname(
+        file.originalname
+    ).toLowerCase();
 
-    // Obtener productos y cantidades de las filas
-    const excelRows = extractPickingOrderRows(rows);
+    const rows = await readSpreadsheet(
+        file.buffer,
+        extension
+    );
 
-    // Buscar cada código SAP en el catálogo
-    const resolvedItems = await resolvePickingOrderExcelItems(excelRows);
-
-    // Preparar los datos para crear una orden
-    const orderData = {
-        warehouse: data.warehouse,
-        operationType: data.operationType,
-        assignedOperators: parseAssignedOperators(data.assignedOperators),
-        items: resolvedItems.map(({ product, quantity }) => ({
-            product: String(product),
-            quantity
-        })),
-        source: "excel",
-        sapReference: data.sapReference || null
-    };
-
-    // Validar la estructura de la orden utilizando Joi
-    const { value, error } = createPickingOrderSchema.validate(orderData, {
-        abortEarly: false
-    });
-
-    if (error) {
+    if (!Array.isArray(rows) || rows.length === 0) {
         throw createError(
             400,
-            "Los datos de la orden no son válidos",
-            error.details.map(({ path, message }) => ({
-                field: path.join("."),
-                message
-            }))
+            "El archivo está vacío"
         );
     }
 
-    // Crear la orden utilizando el mismo servicio que la carga manual
-    return createPickingOrder(value, createdBy);
+    // Buscar la primera fila con contenido
+    const headerIndex = rows.findIndex(
+        (cells) =>
+            Array.isArray(cells) &&
+            cells.some((cell) => String(cell ?? "").trim())
+    );
+
+    if (headerIndex === -1) {
+        throw createError(
+            400,
+            "El archivo está vacío"
+        );
+    }
+
+    // Identificar las columnas obligatorias
+    const columnIndexes = findColumnIndexes(
+        rows[headerIndex]
+    );
+
+    // Obtener y validar las filas de productos
+    return extractPickingOrderRows(
+        rows,
+        headerIndex,
+        columnIndexes
+    );
+};
+
+
+// CU25: convertir los operarios seleccionados en el formulario
+const parseAssignedOperators = (assignedOperators) => {
+
+    if (Array.isArray(assignedOperators)) {
+        return assignedOperators;
+    }
+
+    if (typeof assignedOperators === "string") {
+
+        try {
+            const parsed = JSON.parse(assignedOperators);
+
+            if (Array.isArray(parsed)) {
+                return parsed;
+            }
+
+        } catch {
+            return assignedOperators
+                .split(",")
+                .map((id) => id.trim())
+                .filter(Boolean);
+        }
+    }
+
+    return assignedOperators;
+};
+
+
+// CU25: vista previa de una orden importada desde Excel
+// No crea una orden ni modifica el stock
+export const previewPickingOrderImport = async (file) => {
+
+    // Leer el archivo y validar sus columnas y cantidades
+    const excelRows = await readPickingOrderFile(file);
+
+    // Identificar los productos del catálogo mediante código SAP
+    const items = await resolvePickingOrderExcelItems(
+        excelRows
+    );
+
+    const productIds = items.map((item) => item.product);
+
+    // Obtener el nombre de cada producto desde nuestro catálogo
+    const catalogProducts = await Product.find({
+        _id: { $in: productIds }
+    }).select("_id sapCode description");
+
+    const productsById = new Map(
+        catalogProducts.map((product) => [
+            String(product._id),
+            product
+        ])
+    );
+
+    const products = items.map((item) => {
+
+        const product = productsById.get(
+            String(item.product)
+        );
+
+        return {
+            product: item.product,
+            sapCode: product.sapCode,
+            description: product.description,
+            quantity: item.quantity
+        };
+    });
+
+    return {
+        products,
+        totalProducts: products.length,
+        totalUnits: products.reduce(
+            (total, product) => total + product.quantity,
+            0
+        )
+    };
+};
+
+
+// CU25: importar una orden de picking o reposición desde Excel
+export const importPickingOrder = async (
+    file,
+    data,
+    createdBy
+) => {
+
+    // Leer y validar los productos y cantidades del Excel
+    const excelRows = await readPickingOrderFile(file);
+
+    // Identificar los productos existentes en el catálogo
+    const items = await resolvePickingOrderExcelItems(
+        excelRows
+    );
+
+    // Los demás datos provienen del formulario,
+    // no del archivo Excel
+    const {
+        warehouse,
+        operationType,
+        customerName = null,
+        deliveryDate = null,
+        sapReference = null,
+        assignedOperators
+    } = data;
+
+    const orderData = {
+        warehouse,
+        operationType,
+        items,
+        assignedOperators: parseAssignedOperators(
+            assignedOperators
+        ),
+        customerName: customerName || null,
+        deliveryDate: deliveryDate || null,
+        sapReference: sapReference || null,
+        source: "excel"
+    };
+
+    // Convertir los ObjectId de MongoDB a strings
+    // antes de validar y crear la orden importada.
+    orderData.items = orderData.items.map((item) => ({
+        ...item,
+        product: String(item.product?._id ?? item.product)
+    }));
+
+    // Validar la información completa de la orden
+    const { value, error } = createPickingOrderSchema.validate(
+        orderData,
+        { abortEarly: false }
+    );
+
+    if (error) {
+
+        const messages = error.details
+            .map((detail) => detail.message)
+            .join("; ");
+
+        throw createError(
+            400,
+            `No se pudo importar la orden: ${messages}`
+        );
+    }
+
+    // Crear la orden con los productos del Excel
+    // y los datos seleccionados por el administrativo
+    // No se modifica el stock
+    return await createPickingOrder(
+        value,
+        createdBy
+    );
 };

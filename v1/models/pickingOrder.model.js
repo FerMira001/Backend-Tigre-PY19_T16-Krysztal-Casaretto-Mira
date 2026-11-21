@@ -1,5 +1,6 @@
 
 import mongoose from "mongoose";
+import { randomUUID } from "node:crypto";
 
 const pickingOrderItemSchema = new mongoose.Schema({
 
@@ -25,6 +26,14 @@ const pickingOrderItemSchema = new mongoose.Schema({
 // CU25: generación de órdenes de trabajo de picking y reposición
 const pickingOrderSchema = new mongoose.Schema({
 
+    // Identificador interno para reconocer la orden fácilmente
+    orderCode: {
+        type: String,
+        unique: true,
+        required: true,
+        default: () => `OP-${randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`
+    },
+
     warehouse: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Warehouse",
@@ -35,6 +44,21 @@ const pickingOrderSchema = new mongoose.Schema({
         type: String,
         enum: ["picking", "replenishment"],
         required: true
+    },
+
+    // Cliente o destinatario del pedido
+    // Opcional porque las reposiciones pueden ser internas
+    customerName: {
+        type: String,
+        trim: true,
+        maxlength: 150,
+        default: null
+    },
+
+    // Fecha prevista de entrega del pedido
+    deliveryDate: {
+        type: Date,
+        default: null
     },
 
     items: {
@@ -74,6 +98,7 @@ const pickingOrderSchema = new mongoose.Schema({
         required: true
     },
 
+    // Referencia del pedido original de SAP, cuando corresponda
     sapReference: {
         type: String,
         trim: true,

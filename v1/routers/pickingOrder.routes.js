@@ -1,10 +1,15 @@
 
 import express from "express";
+
 import { authorize } from "../middlewares/authorize.middleware.js";
 import { validateBody } from "../middlewares/validateBody.middleware.js";
 import { uploadCatalogFile } from "../middlewares/upload.middleware.js";
+
 import { ROLES } from "../utils/enums.utils.js";
-import { createPickingOrderSchema } from "../validators/pickingOrder.validator.js";
+
+import {
+    createPickingOrderSchema
+} from "../validators/pickingOrder.validator.js";
 
 import {
     createPickingOrderController,
@@ -14,13 +19,16 @@ import {
 } from "../controllers/pickingOrder.controller.js";
 
 import {
-    importPickingOrderController
+    importPickingOrderController,
+    previewPickingOrderImportController
 } from "../controllers/pickingOrderImport.controller.js";
+
 
 const router = express.Router({ mergeParams: true });
 
 
-// CU25: crear una orden de trabajo de picking o reposición manualmente
+// CU25: crear una orden manualmente
+// Solo personal administrativo
 router.post(
     "/",
     authorize(ROLES.ADMINISTRATIVE),
@@ -29,7 +37,19 @@ router.post(
 );
 
 
-// CU25: importar una orden de picking o reposición desde Excel o CSV
+// CU25: vista previa del Excel antes de crear una orden
+// Solo personal administrativo
+// No guarda información ni modifica el stock
+router.post(
+    "/preview",
+    authorize(ROLES.ADMINISTRATIVE),
+    uploadCatalogFile,
+    previewPickingOrderImportController
+);
+
+
+// CU25: importar una orden desde Excel o CSV
+// Solo personal administrativo
 router.post(
     "/import",
     authorize(ROLES.ADMINISTRATIVE),
@@ -38,7 +58,7 @@ router.post(
 );
 
 
-// CU25: consultar las órdenes asignadas al operario autenticado
+// CU25: consultar las órdenes asignadas al operario
 router.get(
     "/my-orders",
     authorize(ROLES.OPERATOR),
@@ -46,7 +66,8 @@ router.get(
 );
 
 
-// CU25: consultar todas las órdenes de trabajo
+// CU25: consultar todas las órdenes
+// Solo personal administrativo
 router.get(
     "/",
     authorize(ROLES.ADMINISTRATIVE),
@@ -54,7 +75,8 @@ router.get(
 );
 
 
-// CU25: consultar el detalle de una orden de trabajo
+// CU25: consultar el detalle de una orden
+// Personal administrativo u operario asignado
 router.get(
     "/:pickingOrderId",
     authorize(ROLES.ADMINISTRATIVE, ROLES.OPERATOR),

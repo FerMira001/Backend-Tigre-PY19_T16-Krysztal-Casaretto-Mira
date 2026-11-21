@@ -9,18 +9,57 @@ import { createError } from "../utils/error.utils.js";
 import { pickingOrderExcelRowSchema } from "../validators/pickingOrder.validator.js";
 
 
+// CU25: ordenar las órdenes por fecha de entrega y antigüedad
+// 1. Primero las órdenes con fecha de entrega más próxima
+// 2. Si tienen la misma fecha de entrega, primero la más antigua
+// 3. Las órdenes sin fecha de entrega van al final, ordenadas desde la más antigua a la más reciente
+
+const sortPickingOrdersByDeliveryDate = (orders) => {
+
+    return orders.sort((a, b) => {
+
+        const dateA = a.deliveryDate
+            ? new Date(a.deliveryDate).getTime()
+            : Infinity;
+
+        const dateB = b.deliveryDate
+            ? new Date(b.deliveryDate).getTime()
+            : Infinity;
+
+        if (dateA !== dateB) {
+            return dateA - dateB;
+        }
+
+        // Si tienen la misma fecha de entrega (o ambas carecen de ella), mostrar primero la orden que fue creada antes
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    });
+};
+
+
 // CU25: crear una orden de trabajo de picking o reposición
-// Esta función será utilizada tanto por la carga manual como por la importación desde Excel
+// Se utiliza tanto para la carga manual como para la importación desde Excel
 export const createPickingOrder = async (data, createdBy) => {
 
-    const { warehouse, operationType, items, assignedOperators, source = "manual", sapReference = null } = data;
+    const {
+        warehouse,
+        operationType,
+        items,
+        assignedOperators,
+        customerName = null,
+        deliveryDate = null,
+        source = "manual",
+        sapReference = null
+    } = data;
 
     // Verificar que se hayan seleccionado productos y operarios
     if (
         !Array.isArray(items) || items.length === 0 ||
         !Array.isArray(assignedOperators) || assignedOperators.length === 0
     ) {
-        throw createError(400, "Debe seleccionar al menos un producto y un operario");
+        throw createError(
+            400,
+            "Debe seleccionar al menos un producto y un operario"
+        );
     }
 
     // Validar los identificadores
@@ -37,17 +76,26 @@ export const createPickingOrder = async (data, createdBy) => {
     );
 
     if (invalidQuantity) {
-        throw createError(400, "Las cantidades deben ser números enteros mayores a cero");
+        throw createError(
+            400,
+            "Las cantidades deben ser números enteros mayores a cero"
+        );
     }
 
     // No permitir productos repetidos
     if (new Set(productIds.map(String)).size !== productIds.length) {
-        throw createError(400, "No se puede repetir un producto en la misma orden");
+        throw createError(
+            400,
+            "No se puede repetir un producto en la misma orden"
+        );
     }
 
     // No permitir operarios repetidos
     if (new Set(assignedOperators.map(String)).size !== assignedOperators.length) {
-        throw createError(400, "No se puede asignar el mismo operario más de una vez");
+        throw createError(
+            400,
+            "No se puede asignar el mismo operario más de una vez"
+        );
     }
 
     // Verificar que la planta exista
@@ -63,7 +111,10 @@ export const createPickingOrder = async (data, createdBy) => {
     });
 
     if (productCount !== productIds.length) {
-        throw createError(400, "Alguno de los productos seleccionados no existe");
+        throw createError(
+            400,
+            "Alguno de los productos seleccionados no existe"
+        );
     }
 
     // Verificar que el creador sea un usuario administrativo
@@ -73,7 +124,10 @@ export const createPickingOrder = async (data, createdBy) => {
     });
 
     if (!administrative) {
-        throw createError(403, "Solo un usuario administrativo puede crear órdenes de trabajo");
+        throw createError(
+            403,
+            "Solo un usuario administrativo puede crear órdenes de trabajo"
+        );
     }
 
     // Verificar que todos los usuarios asignados sean operarios
@@ -83,21 +137,30 @@ export const createPickingOrder = async (data, createdBy) => {
     }).select("warehouses");
 
     if (operators.length !== assignedOperators.length) {
-        throw createError(400, "Todos los usuarios asignados deben ser operarios existentes");
+        throw createError(
+            400,
+            "Todos los usuarios asignados deben ser operarios existentes"
+        );
     }
 
     // Verificar que los operarios tengan asignada la planta
     const invalidWarehouse = operators.some(
-        (operator) => !operator.warehouses.some(
-            (id) => String(id) === String(warehouse)
-        )
+        (operator) =>
+            !Array.isArray(operator.warehouses) ||
+            !operator.warehouses.some(
+                (id) => String(id) === String(warehouse)
+            )
     );
 
     if (invalidWarehouse) {
-        throw createError(400, "Algún operario no tiene asignada esta planta");
+        throw createError(
+            400,
+            "Algún operario no tiene asignada esta planta"
+        );
     }
 
     // Crear la orden de trabajo
+    // El identificador interno se genera automáticamente en el modelo
     // No se modifica el stock en esta etapa
     const pickingOrder = await PickingOrder.create({
         warehouse,
@@ -105,6 +168,8 @@ export const createPickingOrder = async (data, createdBy) => {
         items,
         assignedOperators,
         createdBy,
+        customerName: customerName || null,
+        deliveryDate: deliveryDate || null,
         source,
         sapReference,
         status: "pending"
@@ -119,7 +184,10 @@ export const createPickingOrder = async (data, createdBy) => {
 export const resolvePickingOrderExcelItems = async (rows) => {
 
     if (!Array.isArray(rows) || rows.length === 0) {
-        throw createError(400, "El archivo debe contener al menos un producto");
+        throw createError(
+            400,
+            "El archivo debe contener al menos un producto"
+        );
     }
 
     // Validar cada fila utilizando el esquema de Joi
@@ -132,7 +200,9 @@ export const resolvePickingOrderExcelItems = async (rows) => {
         if (error) {
             throw createError(
                 400,
-                `Error en la fila ${index + 2}: ${error.details.map((detail) => detail.message).join("; ")}`
+                `Error en la fila ${index + 2}: ${error.details
+                    .map((detail) => detail.message)
+                    .join("; ")}`
             );
         }
 
@@ -143,7 +213,10 @@ export const resolvePickingOrderExcelItems = async (rows) => {
 
     // No permitir códigos SAP repetidos en la misma orden
     if (new Set(sapCodes).size !== sapCodes.length) {
-        throw createError(400, "El archivo contiene códigos SAP repetidos");
+        throw createError(
+            400,
+            "El archivo contiene códigos SAP repetidos"
+        );
     }
 
     // Buscar los productos existentes por su código SAP
@@ -182,19 +255,24 @@ export const getPickingOrders = async (warehouseId = null) => {
     const filter = {};
 
     if (warehouseId) {
+
         if (!mongoose.isValidObjectId(warehouseId)) {
-            throw createError(400, "El identificador de la planta no es válido");
+            throw createError(
+                400,
+                "El identificador de la planta no es válido"
+            );
         }
 
         filter.warehouse = warehouseId;
     }
 
-    return PickingOrder.find(filter)
+    const pickingOrders = await PickingOrder.find(filter)
         .populate("warehouse", "name")
         .populate("items.product", "sapCode description")
         .populate("assignedOperators", "nombreUsuario email")
-        .populate("createdBy", "nombreUsuario")
-        .sort({ createdAt: -1 });
+        .populate("createdBy", "nombreUsuario");
+
+    return sortPickingOrdersByDeliveryDate(pickingOrders);
 };
 
 
@@ -202,15 +280,19 @@ export const getPickingOrders = async (warehouseId = null) => {
 export const getMyPickingOrders = async (userId) => {
 
     if (!mongoose.isValidObjectId(userId)) {
-        throw createError(400, "El identificador del usuario no es válido");
+        throw createError(
+            400,
+            "El identificador del usuario no es válido"
+        );
     }
 
-    return PickingOrder.find({
+    const pickingOrders = await PickingOrder.find({
         assignedOperators: userId
     })
         .populate("warehouse", "name")
-        .populate("items.product", "sapCode description")
-        .sort({ createdAt: -1 });
+        .populate("items.product", "sapCode description");
+
+    return sortPickingOrdersByDeliveryDate(pickingOrders);
 };
 
 
@@ -218,7 +300,10 @@ export const getMyPickingOrders = async (userId) => {
 export const getPickingOrderDetail = async (pickingOrderId, user) => {
 
     if (!mongoose.isValidObjectId(pickingOrderId)) {
-        throw createError(400, "El identificador de la orden no es válido");
+        throw createError(
+            400,
+            "El identificador de la orden no es válido"
+        );
     }
 
     const pickingOrder = await PickingOrder.findById(pickingOrderId)
@@ -239,7 +324,10 @@ export const getPickingOrderDetail = async (pickingOrderId, user) => {
         );
 
         if (!assigned) {
-            throw createError(403, "No tenés permisos para consultar esta orden");
+            throw createError(
+                403,
+                "No tenés permisos para consultar esta orden"
+            );
         }
     }
 
