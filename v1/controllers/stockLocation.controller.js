@@ -13,3 +13,38 @@ export const listElementStock = async (req, res) => {
     const stock = await stockLocationService.listElementStock(req.params.id, req.params.elementId);
     res.status(200).json({ message: "Stock del elemento", data: stock });
 };
+
+// CU09: consultar el stock de un producto en una planta
+export const getProductStockSummary = async (req, res) => {
+
+    const { id: warehouseId, productId } = req.params;
+
+    // Validar que el usuario tenga acceso a la planta
+    await getWarehouse(warehouseId, req.user);
+
+    const stock = await stockLocationService.getProductStockSummary(
+        warehouseId,
+        productId
+    );
+
+    res.status(200).json({
+        message: "Consulta de stock del producto",
+        data: stock
+    });
+};
+
+// CU09: consultar el resumen general de stock de una planta
+export const getWarehouseStockSummary = async (req, res) => {
+
+    const { id: warehouseId } = req.params;
+
+    // Validar que el usuario tenga acceso a la planta
+    await getWarehouse(warehouseId, req.user);
+
+    const stock = await stockLocationService.getWarehouseStockSummary(warehouseId);
+
+    res.status(200).json({
+        message: "Resumen general de stock de la planta",
+        data: stock
+    });
+};
