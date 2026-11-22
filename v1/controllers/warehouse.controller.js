@@ -26,17 +26,17 @@ export const updateWarehouse = async (req, res) => {
 //CU21 y CU22: agregar y eliminar stock de una ubicacion especifica del mapa
 
 export const addStockLocationToElement = async (req, res) => {
-    const { wharehouseId, elementId } = req.params;
+    const { warehouseId, elementId } = req.params;
     const { positionId, productId, quantity } = req.body;
-
-    const updatedElement = await addStockLocationToElementService({wharehouseId, elementId, positionId, productId, quantity });
+    await warehouseService.getWarehouse(warehouseId, req.user);
+    const updatedElement = await addStockLocationToElementService({warehouseId, elementId, positionId, productId, quantity, userId: req.user.userId });
     res.status(200).json({ message: "Stock agregado correctamente a la ubicacion", data: updatedElement });
 };
 
 export const removeStockLocationToElement = async (req, res) => {
-    const { wharehouseId, elementId } = req.params;
+    const { warehouseId, elementId } = req.params;
     const { positionId, productId, quantity } = req.body;
-
-    const updatedElement = await removeStockLocationToElementService({wharehouseId, elementId, positionId, productId, quantity });
+    await warehouseService.getWarehouse(warehouseId, req.user);
+    const updatedElement = await removeStockLocationToElementService({warehouseId, elementId, positionId, productId, quantity, userId: req.user.userId });
     res.status(200).json({ message: "Stock eliminado correctamente de la ubicacion", data: updatedElement });
 }
