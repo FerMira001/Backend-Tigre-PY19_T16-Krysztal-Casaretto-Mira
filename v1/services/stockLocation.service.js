@@ -125,9 +125,8 @@ const validateStockOperation = async (productId, quantity) => {
 };
 
 //CU21 y CU22: agregar y eliminar stock de una ubicacion especifica del mapa
-
-export const addStockLocationToElementService = async ({ wharehouseId, elementId, positionId, productId, quantity }) => {
-    const warehouse = await Warehouse.findById(wharehouseId);
+export const addStockLocationToElementService = async ({ warehouseId, elementId, positionId, productId, quantity, userId }) => {
+    const warehouse = await Warehouse.findById(warehouseId);
     if (!warehouse) throw createError(404, "Planta no encontrada");
 
     const element = warehouse.elements.id(elementId);
@@ -139,22 +138,53 @@ export const addStockLocationToElementService = async ({ wharehouseId, elementId
 
     if (element.type === ELEMENT_TYPES.FLOOR && positionId) {
         throw createError(400, "No se permite positionId para zonas de piso");
+    }
+
+    // Validar que la posición exista y esté activa en la estantería
+    if (element.type === ELEMENT_TYPES.RACK) {
+
+        if (!mongoose.isValidObjectId(positionId)) {
+            throw createError(400, "Id de posición inválido");
+        }
+
+        const level = element.levels?.find(
+            (level) => level.positions.id(positionId)
+        );
+
+        const position = level?.positions.id(positionId);
+
+        if (!position) {
+            throw createError(404, "La posición no existe en esta estantería");
+        }
+
+        if (!position.active) {
+            throw createError(409, "La posición está inactiva");
+        }
     }
 
     await validateStockOperation(productId, quantity);
 
     const stockLocation = await StockLocation.findOneAndUpdate( //esta consulta busca un stockLocation que tenga el mismo warehouse, elementId, positionId y productId.
-        { warehouse: wharehouseId, elementId, positionId: positionId || null, product: productId },// si lo encuentra le suma la cantidad, si no lo encuentra crea uno nuevo
-        { $inc: { quantity } },
+        { warehouse: warehouseId, elementId, positionId: positionId || null, product: productId },// si lo encuentra le suma la cantidad, si no lo encuentra crea uno nuevo
+        {
+            $inc: { quantity },
+            // CU09: registrar el último movimiento
+            $set: {
+                lastMovementBy: userId,
+                lastMovementAt: new Date(),
+                lastMovementType: "add",
+                lastMovementQuantity: quantity
+            }
+        },
         { new: true, upsert: true }//el upsert: true indica que si no encuentra un documento que cumpla con la condición, lo crea. El new: true indica que devuelve el documento actualizado.
     );
 
     return stockLocation;
-    
+
 }
 
-export const removeStockLocationToElementService = async ({ wharehouseId, elementId, positionId, productId, quantity }) => {
-    const warehouse = await Warehouse.findById(wharehouseId);
+export const removeStockLocationToElementService = async ({ warehouseId, elementId, positionId, productId, quantity, userId }) => {
+    const warehouse = await Warehouse.findById(warehouseId);
     if (!warehouse) throw createError(404, "Planta no encontrada");
 
     const element = warehouse.elements.id(elementId);
@@ -168,13 +198,44 @@ export const removeStockLocationToElementService = async ({ wharehouseId, elemen
         throw createError(400, "No se permite positionId para zonas de piso");
     }
 
+    // Validar que la posición exista y esté activa en la estantería
+    if (element.type === ELEMENT_TYPES.RACK) {
+
+        if (!mongoose.isValidObjectId(positionId)) {
+            throw createError(400, "Id de posición inválido");
+        }
+
+        const level = element.levels?.find(
+            (level) => level.positions.id(positionId)
+        );
+
+        const position = level?.positions.id(positionId);
+
+        if (!position) {
+            throw createError(404, "La posición no existe en esta estantería");
+        }
+
+        if (!position.active) {
+            throw createError(409, "La posición está inactiva");
+        }
+    }
+
     await validateStockOperation(productId, quantity);
 
-    const baseFilter = { warehouse: wharehouseId, elementId, positionId: positionId || null, product: productId };
+    const baseFilter = { warehouse: warehouseId, elementId, positionId: positionId || null, product: productId };
 
     const stockLocation = await StockLocation.findOneAndUpdate(
         { ...baseFilter, quantity: { $gte: quantity } },//gte = grater tahn or equal, es decir, que la cantidad actual sea mayor o igual a la cantidad que se quiere restar
-        { $inc: { quantity: -quantity } }, //incrementamos en negativo para restar la cantidad
+        {
+            $inc: { quantity: -quantity }, //incrementamos en negativo para restar la cantidad
+            // CU09: registrar el último movimiento
+            $set: {
+                lastMovementBy: userId,
+                lastMovementAt: new Date(),
+                lastMovementType: "remove",
+                lastMovementQuantity: quantity
+            }
+        },
         { new: true }
     );
 
@@ -188,5 +249,103 @@ export const removeStockLocationToElementService = async ({ wharehouseId, elemen
     }
 
     return stockLocation;
-    
-}
+};
+
+// CU09: consultar el stock de un producto en una planta
+export const getProductStockSummary = async (warehouseId, productId) => {
+
+    if (!mongoose.isValidObjectId(productId)) {
+        throw createError(400, "Id de producto inválido");
+    }
+
+    const product = await Product.findById(productId)
+        .select("sapCode description");
+
+    if (!product) {
+        throw createError(404, "Producto no encontrado");
+    }
+
+    // Obtener las ubicaciones del producto con stock disponible
+    const locations = (await getProductStockLocations(warehouseId, productId))
+        .filter((location) => location.quantity > 0);
+
+    // Calcular la cantidad total del producto en la planta
+    const totalQuantity = locations.reduce(
+        (total, location) => total + location.quantity,
+        0
+    );
+
+    // Buscar el último movimiento registrado del producto
+    const latestStock = await StockLocation.findOne({
+        warehouse: warehouseId,
+        product: productId,
+        lastMovementAt: { $ne: null }
+    })
+        .sort({ lastMovementAt: -1 })
+        .populate("lastMovementBy", "nombreUsuario");
+
+    return {
+        product,
+        totalQuantity,
+        locations,
+        lastMovement: latestStock ? {
+            user: latestStock.lastMovementBy?.nombreUsuario ?? null,
+            date: latestStock.lastMovementAt,
+            type: latestStock.lastMovementType,
+            quantity: latestStock.lastMovementQuantity
+        } : null
+    };
+};
+
+// CU09: consultar el stock total de todos los productos de una planta
+export const getWarehouseStockSummary = async (warehouseId) => {
+
+    if (!mongoose.isValidObjectId(warehouseId)) {
+        throw createError(400, "Id de planta inválido");
+    }
+
+    const products = await StockLocation.aggregate([
+        // Buscar los registros con stock de la planta seleccionada
+        {
+            $match: {
+                warehouse: new mongoose.Types.ObjectId(warehouseId),
+                quantity: { $gt: 0 }
+            }
+        },
+
+        // Sumar las cantidades de cada producto
+        {
+            $group: {
+                _id: "$product",
+                totalQuantity: { $sum: "$quantity" }
+            }
+        },
+
+        // Obtener los datos del producto
+        {
+            $lookup: {
+                from: Product.collection.name,
+                localField: "_id",
+                foreignField: "_id",
+                as: "product"
+            }
+        },
+        { $unwind: "$product" },
+
+        // Devolver solamente los datos necesarios para el resumen
+        {
+            $project: {
+                _id: 0,
+                productId: "$_id",
+                sapCode: "$product.sapCode",
+                description: "$product.description",
+                totalQuantity: 1
+            }
+        },
+
+        { $sort: { sapCode: 1 } }
+    ]);
+
+    return { products };
+};
+

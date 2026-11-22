@@ -33,6 +33,29 @@ const stockLocationSchema = new mongoose.Schema({
             validator: Number.isInteger,
             message: "La cantidad debe ser un número entero"
         }
+    },
+
+     lastMovementBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Usuario",
+        default: null
+    },
+
+    lastMovementAt: {
+        type: Date,
+        default: null
+    },
+
+    lastMovementType: {
+        type: String,
+        enum: ["add", "remove"],
+        default: null
+    },
+
+    lastMovementQuantity: {
+        type: Number,
+        min: 1,
+        default: null
     }
 
 }, { timestamps: true });
