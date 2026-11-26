@@ -39,6 +39,8 @@ const elementSchema = new mongoose.Schema({
 // Planta, almacén o depósito: son lo mismo
 const warehouseSchema = new mongoose.Schema({
     name: { type: String, required: true, trim: true, maxlength: 80 },
+    // El nombre en minúsculas y sin acentos: sirve para que no se repita y para ordenar
+    normalizedName: { type: String, required: true, select: false },
     address: { type: String, required: true, trim: true, maxlength: 150 },
     elements: { type: [elementSchema], default: [] },
     // Tamaño elegido para el plano, en metros. Es un mínimo: si los elementos piden más, el plano crece
@@ -47,6 +49,6 @@ const warehouseSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // El nombre no se repite aunque cambien las mayúsculas o los acentos
-warehouseSchema.index({ name: 1 }, { unique: true, collation: { locale: "es", strength: 1 } });
+warehouseSchema.index({ normalizedName: 1 }, { unique: true });
 
 export default mongoose.model("Warehouse", warehouseSchema);

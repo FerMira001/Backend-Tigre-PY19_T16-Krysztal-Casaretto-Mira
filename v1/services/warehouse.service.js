@@ -7,6 +7,9 @@ const DUPLICATE_MESSAGE = "Ya existe una planta con ese nombre";
 // La estructura del mapa se pide aparte (CU15): puede ser pesada y las pantallas de plantas no la usan
 const WITHOUT_STRUCTURE = "-elements";
 
+// "Planta Norte" y "planta norté" dan lo mismo
+const normalizeName = (name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
 const assignedWarehouseIds = async (userId) => {
     const user = await Usuario.findById(userId).select("warehouses");
     return user?.warehouses ?? [];
@@ -15,7 +18,7 @@ const assignedWarehouseIds = async (userId) => {
 // Los administradores ven todas las plantas; los operarios, solo las asignadas
 export const listWarehouses = async ({ userId, rol }) => {
     const filter = rol === ROLES.ADMINISTRATIVE ? {} : { _id: { $in: await assignedWarehouseIds(userId) } };
-    return Warehouse.find(filter).select(WITHOUT_STRUCTURE).sort({ name: 1 }).collation({ locale: "es" });
+    return Warehouse.find(filter).select(WITHOUT_STRUCTURE).sort({ normalizedName: 1 });
 };
 
 // CU17 paso 3. RN14: un operario no accede a una planta que no tiene asignada
@@ -34,7 +37,7 @@ export const getWarehouse = async (id, { userId, rol }) => {
 
 export const createWarehouse = async (data) => {
     try {
-        return await Warehouse.create(data);
+        return await Warehouse.create({ ...data, normalizedName: normalizeName(data.name) });
     } catch (error) {
         if (error.code === 11000) throw createError(409, DUPLICATE_MESSAGE);
         throw error;
@@ -43,6 +46,7 @@ export const createWarehouse = async (data) => {
 
 export const updateWarehouse = async (id, data) => {
     try {
+        if (data.name) data.normalizedName = normalizeName(data.name);
         const warehouse = await Warehouse.findByIdAndUpdate(id, data, { new: true, runValidators: true }).select(WITHOUT_STRUCTURE);
         if (!warehouse) throw createError(404, "Planta no encontrada");
         return warehouse;
