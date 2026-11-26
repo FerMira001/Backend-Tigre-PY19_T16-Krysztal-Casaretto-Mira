@@ -11,7 +11,8 @@ connectDB();
 
 const app = express()
 
-app.use(cors({ origin: 'http://localhost:5173' }))  
+// Origen permitido: la URL del front (la misma que arma el enlace de recuperación de contraseña)
+app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:5173' }))
 
 app.use(express.json({ limit: '1mb' })) // Una estantería con todas sus posiciones puede superar los 100 KB por defecto
 
